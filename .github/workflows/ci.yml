@@ -1,0 +1,123 @@
+name: UNF*CK Core CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # STEP 1: Free static code analysis
+  lint-and-format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/allowed/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff Linter & Formatter
+        run: |
+          ruff check backend/
+          ruff format --check backend/
+
+  # STEP 2: Automated tests (runs only if step 1 passes)
+  backend-tests:
+    needs: lint-and-format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run Pytest
+        env:
+          SUPABASE_URL: "http://mock-url.co"
+          SUPABASE_ANON_KEY: "mock-key"
+          OPENAI_API_KEY: "mock-key"
+        run: |
+          cd backend
+          pytest
+
+  # STEP 3: Low-cost AI review (PRs only, after tests pass)
+  ai-diff-review:
+    needs: backend-tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required to fetch history for git diff
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install OpenAI Client
+        run: pip install openai
+
+      - name: Run Lean AI Review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: python
+        run: |
+          import os
+          import subprocess
+          from openai import OpenAI
+
+          # 1. Fetch only changed lines (diff) against the target branch
+          try:
+              diff_output = subprocess.check_output(
+                  ["git", "diff", "origin/main...HEAD", "--", "backend/"], 
+                  text=True
+              )
+          except Exception as e:
+              print(f"Error fetching git diff: {e}")
+              exit(0)
+
+          if not diff_output.strip():
+              print("No backend code changes for AI to analyze.")
+              exit(0)
+
+          # 2. Initialize lightweight model (token savings)
+          client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+          
+          system_prompt = (
+              "You are a strict code security auditor for the UNF*CK application. "
+              "You analyze ONLY the submitted 'git diff'. Look only for critical logic errors, "
+              "memory leaks, Supabase RLS rule bypasses, or hardcoded keys. "
+              "Be extremely concise. If the code is safe, write only 'Approved'. "
+              "Do not praise the code or write introductions."
+          )
+
+          print("Sending diff for cost-effective analysis...")
+          response = client.chat.completions.create(
+              model="gpt-4o-mini", # Cheapest and highly effective model for diffs
+              messages=[
+                  {"role": "system", "content": system_prompt},
+                  {"role": "user", "content": f"Here is my git diff:\n\n{diff_output}"}
+              ],
+              temperature=0.2
+          )
+          
+          print("\n=== AI CRITIQUE REPORT ===")
+          print(response.choices[0].message.content)
+          print("==========================")
