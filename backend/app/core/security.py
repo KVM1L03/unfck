@@ -26,7 +26,9 @@ async def get_current_user_client(
         client.postgrest.auth(token)
         return client
     except Exception as exc:
-        logger.error("Auth dependency failed — could not initialise Supabase client: %s", exc)
+        logger.error(
+            "Auth dependency failed — could not initialise Supabase client: %s", exc
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

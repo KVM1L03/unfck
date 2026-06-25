@@ -30,8 +30,7 @@ async def create_workout(client: AsyncClient, data: WorkoutCreate) -> dict[str, 
 
     if sets:
         sets_payload = [
-            {**s.model_dump(mode="json"), "workout_id": workout_id}
-            for s in sets
+            {**s.model_dump(mode="json"), "workout_id": workout_id} for s in sets
         ]
         await client.table(SETS_TABLE).insert(sets_payload).execute()
 
