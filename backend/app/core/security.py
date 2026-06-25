@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from supabase import AsyncClient, acreate_client
@@ -5,32 +7,38 @@ from supabase import AsyncClient, acreate_client
 from app.core.config import settings
 from app.core.logger import logger
 
-_bearer = HTTPBearer()
-
 
 async def get_current_user_client(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())],
 ) -> AsyncClient:
-    """
-    Creates a per-request Supabase client authenticated with the caller's JWT.
-    All downstream DB queries execute under that user's RLS context — never the
-    service role.  No user_id filtering is needed in application code.
-    """
     token = credentials.credentials
     try:
         client: AsyncClient = await acreate_client(
             settings.SUPABASE_URL,
             settings.SUPABASE_ANON_KEY,
         )
-        # Forward the user JWT so PostgREST evaluates RLS as auth.uid()
+        # Validate the JWT against Supabase Auth before touching any data.
+        # get_user() verifies the signature and expiry server-side; a forged or
+        # expired token is rejected here rather than producing a confusing DB error.
+        user_resp = await client.auth.get_user(token)
+        if not user_resp.user:
+            raise ValueError("Token resolved to no user")
+
+        # Forward the validated JWT so every PostgREST query runs under
+        # auth.uid() — this is what triggers RLS policies.
         client.postgrest.auth(token)
         return client
+
+    except HTTPException:
+        raise  # already formatted, let it propagate
     except Exception as exc:
-        logger.error(
-            "Auth dependency failed — could not initialise Supabase client: %s", exc
-        )
+        logger.error("Auth failed — rejected request with invalid token: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+# Single import alias for all routers — avoids repeating Depends(...) everywhere.
+UserClient = Annotated[AsyncClient, Depends(get_current_user_client)]
